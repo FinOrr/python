@@ -108,8 +108,44 @@ class DQNAgent:
             param.grad.data.clamp_(-1, 1)
         self.optimizer.step()
         
-#Environment: This class simulates the gas chamber system and provides the state and reward information to the agent.
+#Environment: This class simulates the pod system and provides the state and reward information to the agent, DQNAgent
+
 
 #Pod: This class encapsulates the details of the chamber system, such as the equations that govern its behavior.
+#This class represents the physical pod system and has the following attributes:
+#target_pressure: The target pressure for the chamber.
+#supply_pressure: The pressure of the gas supply.
+#chamber_pressure: The pressure of the gas chamber.
+#atmospheric_pressure: The atmospheric pressure.
+#control_valve_state: The current state of the control valve.
+#The update method takes in the input data from the sensors and updates the attributes of the Pod object accordingly. 
+#It also calculates the new state of the control valve based on the current chamber pressure and target pressure, and returns the new state as a tuple.
+class Pod:
+    def __init__(self):
+        # Initialize sensors
+        self.target_pressure = 0
+        self.supply_pressure = 0
+        self.chamber_pressure = 0
+        self.atmospheric_pressure = 0
+
+        # Initialize control valve
+        self.control_valve_state = 0
+
+    def update(self, data):
+        # Parse input data
+        values = data.strip().split(',')
+        self.target_pressure = float(values[0])
+        self.supply_pressure = float(values[1])
+        self.chamber_pressure = float(values[2])
+        self.atmospheric_pressure = float(values[3])
+
+        # Update control valve state based on current pressure
+        if self.chamber_pressure < self.target_pressure:
+            self.control_valve_state = min(self.control_valve_state + 1, 7)
+        elif self.chamber_pressure > self.target_pressure:
+            self.control_valve_state = max(self.control_valve_state - 1, 0)
+
+        # Return new state as a tuple
+        return (self.target_pressure, self.supply_pressure, self.chamber_pressure, self.atmospheric_pressure, self.control_valve_state)
 
 # Plotter: This class provides a visual representation of the training process, displaying the training progress and performance metrics over time.
