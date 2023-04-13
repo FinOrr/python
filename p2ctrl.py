@@ -109,6 +109,8 @@ def take_action(action):
     """Send a control signal to the system based on the chosen action."""
     # Map the action to a control signal
     # Send the control signal to the system
+    # This will be a FSM state, ignore for now
+    pass
 
 
 if __name__ == '__main__':
