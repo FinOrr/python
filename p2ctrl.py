@@ -34,6 +34,24 @@ class DQN_MLP(nn.Module):
         x = self.fc3(x)
         return x
 #ReplayMemory: This class is responsible for storing and retrieving experiences, which are tuples containing the state, action, reward, next state, and done flag.
+class ReplayMemory:
+    def __init__(self, capacity):
+        self.capacity = capacity
+        self.memory = []
+        self.position = 0
+
+    def push(self, state, action, next_state, reward):
+        """Saves a transition."""
+        if len(self.memory) < self.capacity:
+            self.memory.append(None)
+        self.memory[self.position] = (state, action, next_state, reward)
+        self.position = (self.position + 1) % self.capacity
+
+    def sample(self, batch_size):
+        return random.sample(self.memory, batch_size)
+
+    def __len__(self):
+        return len(self.memory)
 
 #Agent: This class acts as the interface between the DQN and the environment. It receives observations from the environment, selects actions using the DQN, and updates the DQN using experiences from the replay memory.
 class DQNAgent:
