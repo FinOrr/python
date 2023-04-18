@@ -1,151 +1,196 @@
-import serial
 import numpy as np
-import torch
-import torch.nn as nn
-import torch.optim as optim
 import random
-import matplotlib.pyplot as plt
+import serial
 
-# Define hyperparameters
-BATCH_SIZE = 32
-GAMMA = 0.99
-EPS_START = 0.9
-EPS_END = 0.05
-EPS_DECAY = 200
-TARGET_UPDATE = 10
-NUM_EPISODES = 1000
-MAX_TIMESTEPS = 1000
-HIDDEN_SIZE = 128
-LR = 0.001
-
-#DQN: This class defines the architecture of the DQN with MLP and implements the training process.
-class DQN_MLP(nn.Module):
-    def __init__(self, input_size, output_size):
-        super(DQN_MLP, self).__init__()
-        self.input_size = input_size
-        self.output_size = output_size
-        self.fc1 = nn.Linear(input_size, 64)
-        self.fc2 = nn.Linear(64, 32)
-        self.fc3 = nn.Linear(32, output_size)
-
-    def forward(self, x):
-        x = F.relu(self.fc1(x))
-        x = F.relu(self.fc2(x))
-        x = self.fc3(x)
-        return x
-#ReplayMemory: This class is responsible for storing and retrieving experiences, which are tuples containing the state, action, reward, next state, and done flag.
 class ReplayMemory:
-    def __init__(self, capacity):
+    def __init__(self, capacity: int):
         self.capacity = capacity
-        self.memory = []
-        self.position = 0
+        self.memory = deque(maxlen=capacity)
+    
+    def add(self, state, action, reward, next_state, done):
+        experience = (state, action, reward, next_state, done)
+        self.memory.append(experience)
+    
+    def sample(self, batch_size: int):
+        batch = random.sample(self.memory, batch_size)
+        state_batch, action_batch, reward_batch, next_state_batch, done_batch = map(np.asarray, zip(*batch))
+        return state_batch, action_batch, reward_batch, next_state_batch, done_batch
 
-    def push(self, state, action, next_state, reward):
-        """Saves a transition."""
-        if len(self.memory) < self.capacity:
-            self.memory.append(None)
-        self.memory[self.position] = (state, action, next_state, reward)
-        self.position = (self.position + 1) % self.capacity
+class DDQNN():
+    def __init__(self) -> None:
+        pass
+        
+    def build_network(input_dim=4, output_dim=8):
+        model = Sequential()
+        model.add(Dense(16, input_dim=input_dim, kernel_initializer=he_normal()))
+        model.add(Activation('relu'))
+        model.add(Dropout(0.2))
+        model.add(Dense(output_dim, kernel_initializer=he_normal()))
+        model.add(Activation('linear'))
+        model.compile(loss='mse', optimizer=Adam(lr=0.001))
+        return model
 
-    def sample(self, batch_size):
-        return random.sample(self.memory, batch_size)
-
-    def __len__(self):
-        return len(self.memory)
-
-#Agent: This class acts as the interface between the DQN and the environment. It receives observations from the environment, selects actions using the DQN, and updates the DQN using experiences from the replay memory.
-class DQNAgent:
-    def __init__(self, input_size, output_size, gamma=0.99, batch_size=32, lr=1e-4):
-        self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-        self.policy_net = DQN_MLP(input_size, output_size).to(self.device)
-        self.target_net = DQN_MLP(input_size, output_size).to(self.device)
-        self.target_net.load_state_dict(self.policy_net.state_dict())
-        self.target_net.eval()
-        self.gamma = gamma
-        self.batch_size = batch_size
-        self.optimizer = optim.Adam(self.policy_net.parameters(), lr=lr)
-        self.memory = ReplayMemory(10000)
-        self.steps_done = 0
-        self.episode_durations = []
-
-    def select_action(self, state, epsilon):
-        sample = random.random()
-        if sample > epsilon:
-            with torch.no_grad():
-                state = torch.tensor(state, dtype=torch.float32, device=self.device)
-                q_values = self.policy_net(state)
-                action = q_values.argmax().item()
+    def act(state, exploration_rate):
+        if np.random.rand() < exploration_rate:
+            # Exploration: choose a random action
+            action = np.random.randint(low=0, high=output_dim)
         else:
-            action = random.randrange(self.policy_net.output_size)
-        self.steps_done += 1
+            # Exploitation: choose the action with highest Q-value
+            q_values = model.predict(np.array([state]))
+            action = np.argmax(q_values)
         return action
 
-    def optimize_model(self):
-        if len(self.memory) < self.batch_size:
-            return
-        transitions = self.memory.sample(self.batch_size)
-        batch = Transition(*zip(*transitions))
-        non_final_mask = torch.tensor(tuple(map(lambda s: s is not None, batch.next_state)),
-                                      device=self.device, dtype=torch.bool)
-        non_final_next_states = torch.cat([torch.tensor(s, dtype=torch.float32, device=self.device).unsqueeze(0)
-                                           for s in batch.next_state if s is not None])
-        state_batch = torch.tensor(batch.state, dtype=torch.float32, device=self.device)
-        action_batch = torch.tensor(batch.action, dtype=torch.int64, device=self.device).unsqueeze(1)
-        reward_batch = torch.tensor(batch.reward, dtype=torch.float32, device=self.device)
+    def compile_network(model, learning_rate):
+        opt = keras.optimizers.Adam(lr=learning_rate)
+        model.compile(loss='mean_squared_error', optimizer=opt)
 
-        state_action_values = self.policy_net(state_batch).gather(1, action_batch)
+    def evaluate(env, agent, num_episodes=10, max_steps=200):
+        """
+        Evaluate the agent over multiple episodes on the given environment.
 
-        next_state_values = torch.zeros(self.batch_size, device=self.device)
-        next_state_values[non_final_mask] = self.target_net(non_final_next_states).max(1)[0].detach()
+        Args:
+            env (gym.Env): The environment to evaluate the agent on.
+            agent (DQNAgent): The agent to use for evaluation.
+            num_episodes (int): The number of episodes to run evaluation on.
+            max_steps (int): The maximum number of steps to take per episode.
 
-        expected_state_action_values = (next_state_values * self.gamma) + reward_batch
+        Returns:
+            A tuple of mean absolute error, mean squared error, and percentage error.
+        """
+        mae_list, mse_list, perc_err_list = [], [], []
 
-        loss = F.smooth_l1_loss(state_action_values, expected_state_action_values.unsqueeze(1))
+        for episode in range(num_episodes):
+            state = env.reset()
+            done = False
+            step = 0
+            mae, mse, perc_err = 0, 0, 0
 
-        self.optimizer.zero_grad()
-        loss.backward()
-        for param in self.policy_net.parameters():
-            param.grad.data.clamp_(-1, 1)
-        self.optimizer.step()
+            while not done and step < max_steps:
+                # Select an action
+                action = agent.act(state, explore=False)
+
+                # Take a step in the environment
+                next_state, reward, done, _ = env.step(action)
+
+                # Update evaluation metrics
+                mae += abs(next_state[-1] - env.target_pressure)
+                mse += (next_state[-1] - env.target_pressure) ** 2
+                perc_err += abs((next_state[-1] - env.target_pressure) / env.target_pressure)
+
+                state = next_state
+                step += 1
+
+            mae /= step
+            mse /= step
+            perc_err /= step
+
+            mae_list.append(mae)
+            mse_list.append(mse)
+            perc_err_list.append(perc_err)
+
+        mean_mae = sum(mae_list) / len(mae_list)
+        mean_mse = sum(mse_list) / len(mse_list)
+        mean_perc_err = sum(perc_err_list) / len(perc_err_list)
+
+        return mean_mae, mean_mse, mean_perc_err
+
+    ## UPDATED TRAIN WITH TAKE_ACTION
+    def train(env, model, target_model, memory, n_epochs, batch_size, gamma, update_freq, exploration_rate, min_exploration_rate, exploration_decay_rate, rolling_window=10, patience=15):
+        best_mae = np.inf
+        best_weights = None
+        rolling_mae = []
+        exploration_step = (exploration_rate - min_exploration_rate) / exploration_decay_rate
+
+        for epoch in range(n_epochs):
+            obs = env.reset()
+            done = False
+            epoch_loss = []
+
+            while not done:
+                # Epsilon-greedy exploration strategy
+                if np.random.rand() < exploration_rate:
+                    action = np.random.randint(env.action_space.n)
+                else:
+                    action = np.argmax(model.predict(obs[np.newaxis, :]))
+
+                next_obs, reward, done, _ = env.step(action)
+                memory.add(obs, action, reward, next_obs, done)
+                obs = next_obs
+
+                # Update target network weights
+                if memory.counter % update_freq == 0:
+                    target_model.set_weights(model.get_weights())
+
+                # Sample from replay memory and train the model
+                if memory.counter > batch_size:
+                    batch = memory.sample(batch_size)
+                    loss = train_step(batch, model, target_model, gamma)
+                    epoch_loss.append(loss)
+
+            # Decrease exploration rate
+            exploration_rate = max(min_exploration_rate, exploration_rate - exploration_step)
+
+            # Calculate evaluation metrics and print progress
+            if epoch % 10 == 0:
+                mae, mse, percent_error, ttss = evaluate(model, env)
+                rolling_mae.append(mae)
+
+                if len(rolling_mae) > rolling_window:
+                    rolling_mae.pop(0)
+
+                current_mae = np.mean(rolling_mae)
+
+                if current_mae < best_mae:
+                    best_mae = current_mae
+                    best_weights = model.get_weights()
+                    patience_counter = 0
+                else:
+                    patience_counter += 1
+
+                print(f"Epoch {epoch}/{n_epochs}, Exploration: {exploration_rate:.2f}, MAE: {current_mae:.2f}, MSE: {mse:.2f}, % Error: {percent_error:.2f}, TTSS: {ttss:.2f}, Patience: {patience_counter}/{patience}")
+
+                if patience_counter >= patience:
+                    print("Early stopping")
+                    break
+
+        model.set_weights(best_weights)
+        return model
+
+
+    def receive_data():
+        # Initialize serial connection
+        ser = serial.Serial('COM3', 115200)
         
-#Environment: This class simulates the pod system and provides the state and reward information to the agent, DQNAgent
+        while True:
+            # Read a line of data from the serial port
+            data = ser.readline().decode().strip()
+
+            # Split the data into individual pressure values
+            pressures = data.split(',')
+            
+            # Convert pressure values from string to integer
+            supply_pressure = int(pressures[0])
+            chamber_pressure = int(pressures[1])
+            atmospheric_pressure = int(pressures[2])
+            target_pressure = int(pressures[3])
+            
+            # TODO: pass the pressure values to the DQNN for action selection and control
 
 
-#Pod: This class encapsulates the details of the chamber system, such as the equations that govern its behavior.
-#This class represents the physical pod system and has the following attributes:
-#target_pressure: The target pressure for the chamber.
-#supply_pressure: The pressure of the gas supply.
-#chamber_pressure: The pressure of the gas chamber.
-#atmospheric_pressure: The atmospheric pressure.
-#control_valve_state: The current state of the control valve.
-#The update method takes in the input data from the sensors and updates the attributes of the Pod object accordingly. 
-#It also calculates the new state of the control valve based on the current chamber pressure and target pressure, and returns the new state as a tuple.
-class Pod:
-    def __init__(self):
-        # Initialize sensors
-        self.target_pressure = 0
-        self.supply_pressure = 0
-        self.chamber_pressure = 0
-        self.atmospheric_pressure = 0
+    def receiver(port='COM3', baudrate=115200):
+        ser = serial.Serial(port=port, baudrate=baudrate)
+        while True:
+            line = ser.readline().decode('utf-8').rstrip()
+            values = list(map(int, line.split(',')))
+            values = np.clip(values, 8000, 120000)
+            values = (values - 8000) / (120000 - 8000)
+            yield values
 
-        # Initialize control valve
-        self.control_valve_state = 0
+    def send_control_signal(action):
+        with serial.Serial('COM3', 115200, timeout=1) as ser:
+            ser.write(bytes([action]))
+            ser.write(b'\n')
+        return
 
-    def update(self, data):
-        # Parse input data
-        values = data.strip().split(',')
-        self.target_pressure = float(values[0])
-        self.supply_pressure = float(values[1])
-        self.chamber_pressure = float(values[2])
-        self.atmospheric_pressure = float(values[3])
-
-        # Update control valve state based on current pressure
-        if self.chamber_pressure < self.target_pressure:
-            self.control_valve_state = min(self.control_valve_state + 1, 7)
-        elif self.chamber_pressure > self.target_pressure:
-            self.control_valve_state = max(self.control_valve_state - 1, 0)
-
-        # Return new state as a tuple
-        return (self.target_pressure, self.supply_pressure, self.chamber_pressure, self.atmospheric_pressure, self.control_valve_state)
-
-# Plotter: This class provides a visual representation of the training process, displaying the training progress and performance metrics over time.
+if __name__ == '__main__':
+    pass
